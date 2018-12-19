@@ -20,13 +20,16 @@ namespace ImgMerge
         public static Bitmap CombinImage(Image img1, Image img2, int xDeviation = 0, int yDeviation = 0)
         {
             Bitmap bmp = new Bitmap(img1.Width, img1.Height + img2.Height);
+            var p = new Pen(new SolidBrush(Color.LightGray), 1.0f);
+            p.DashStyle = System.Drawing.Drawing2D.DashStyle.Custom;
+            p.DashPattern = new float[] { 5, 5 };
 
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.White);
                 g.DrawImage(img1, 0, 0, img1.Width, img1.Height);
                 g.DrawImage(img2, 0, img1.Height, img2.Width, img2.Height);
-
+                g.DrawLine(p, 0, img1.Height, img1.Width, img1.Height);
             }
             GC.Collect();
             return bmp;
