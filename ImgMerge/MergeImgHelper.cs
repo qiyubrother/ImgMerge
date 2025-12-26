@@ -5,15 +5,100 @@ using System.Text;
 using System.Drawing;
 using System.IO;
 using System.Runtime.Versioning;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
 
 namespace ImgMerge
 {
     [SupportedOSPlatform("windows")]
     class MergeImgHelper
     {
+        // 临时文件缓存，用于存储转换后的WebP文件
+        private static readonly Dictionary<string, string> _webpCache = new Dictionary<string, string>();
+        private static readonly object _cacheLock = new object();
+
+        /// <summary>
+        /// 将WebP文件转换为PNG临时文件
+        /// </summary>
+        private static string ConvertWebPToPng(string webpPath)
+        {
+            lock (_cacheLock)
+            {
+                // 检查缓存
+                if (_webpCache.TryGetValue(webpPath, out var cachedPath) && File.Exists(cachedPath))
+                {
+                    return cachedPath;
+                }
+
+                // 创建临时文件
+                var tempDir = Path.Combine(Path.GetTempPath(), "ImgMerge_WebP");
+                if (!Directory.Exists(tempDir))
+                {
+                    Directory.CreateDirectory(tempDir);
+                }
+
+                var tempFile = Path.Combine(tempDir, $"{Guid.NewGuid()}.png");
+
+                try
+                {
+                    // 使用ImageSharp读取WebP并保存为PNG
+                    using (var image = SixLabors.ImageSharp.Image.Load(webpPath))
+                    {
+                        image.SaveAsPng(tempFile);
+                    }
+
+                    // 缓存转换后的文件路径
+                    _webpCache[webpPath] = tempFile;
+                    return tempFile;
+                }
+                catch (Exception ex)
+                {
+                    // 如果转换失败，清理临时文件
+                    if (File.Exists(tempFile))
+                    {
+                        try { File.Delete(tempFile); } catch { }
+                    }
+                    throw new Exception($"无法转换WebP文件: {webpPath}", ex);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 清理WebP转换缓存
+        /// </summary>
+        public static void CleanupWebPCache()
+        {
+            lock (_cacheLock)
+            {
+                foreach (var tempFile in _webpCache.Values)
+                {
+                    try
+                    {
+                        if (File.Exists(tempFile))
+                        {
+                            File.Delete(tempFile);
+                        }
+                    }
+                    catch { }
+                }
+                _webpCache.Clear();
+
+                // 尝试删除临时目录
+                try
+                {
+                    var tempDir = Path.Combine(Path.GetTempPath(), "ImgMerge_WebP");
+                    if (Directory.Exists(tempDir))
+                    {
+                        Directory.Delete(tempDir, true);
+                    }
+                }
+                catch { }
+            }
+        }
+
         /// <summary>
         /// 获取图像尺寸信息
-        /// 注意：Image.FromFile 会加载整个图像到内存，但我们会立即释放
+        /// 如果是WebP文件，先转换为PNG再读取
         /// </summary>
         private static (int width, int height) GetImageDimensions(string filePath)
         {
@@ -22,10 +107,33 @@ namespace ImgMerge
                 throw new FileNotFoundException($"图像文件不存在: {filePath}");
             }
             
-            // Image.FromFile 会加载整个图像，但我们只读取尺寸后立即释放
-            using (var img = Image.FromFile(filePath))
+            var ext = Path.GetExtension(filePath).ToLower();
+            string actualPath = filePath;
+
+            // 如果是WebP文件，先转换为PNG
+            if (ext == ".webp")
             {
-                return (img.Width, img.Height);
+                try
+                {
+                    actualPath = ConvertWebPToPng(filePath);
+                }
+                catch (Exception ex)
+                {
+                    throw new Exception($"无法处理WebP文件: {filePath}。转换失败: {ex.Message}", ex);
+                }
+            }
+            
+            try
+            {
+                // Image.FromFile 会加载整个图像，但我们只读取尺寸后立即释放
+                using (var img = System.Drawing.Image.FromFile(actualPath))
+                {
+                    return (img.Width, img.Height);
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"无法读取图像文件: {filePath}。可能文件格式不支持或文件已损坏。", ex);
             }
         }
 
@@ -65,6 +173,7 @@ namespace ImgMerge
                 }
                 catch (Exception ex)
                 {
+                    Console.WriteLine(ex.Message);
                     throw new ArgumentException($"处理图像文件时出错: {file}", ex);
                 }
             }
@@ -87,7 +196,17 @@ namespace ImgMerge
             if (fileList.Count == 1)
             {
                 // 只有一张图片，直接返回
-                return new Bitmap(Image.FromFile(fileList[0]));
+                var singleFile = fileList[0];
+                var ext = Path.GetExtension(singleFile).ToLower();
+                string actualPath = singleFile;
+                
+                // 如果是WebP文件，先转换
+                if (ext == ".webp")
+                {
+                    actualPath = ConvertWebPToPng(singleFile);
+                }
+                
+                return new Bitmap(System.Drawing.Image.FromFile(actualPath));
             }
 
             // 第一步：预先计算所有图像的尺寸（只加载元数据，不加载完整图像）
@@ -132,10 +251,10 @@ namespace ImgMerge
                     g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
                     
                     // 清除背景
-                    g.Clear(Color.White);
+                    g.Clear(System.Drawing.Color.White);
                     
                     // 准备画笔和画笔（复用，避免重复创建）
-                    using (var brush = new SolidBrush(Color.LightGray))
+                    using (var brush = new SolidBrush(System.Drawing.Color.LightGray))
                     using (var pen = new Pen(brush, 1.0f))
                     {
                         pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Custom;
@@ -146,29 +265,66 @@ namespace ImgMerge
                         // 第三步：流式处理 - 一次只加载一张图像
                         for (int i = 0; i < fileList.Count; i++)
                         {
-                            using (var img = Image.FromFile(fileList[i]))
+                            var filePath = fileList[i];
+                            var ext = Path.GetExtension(filePath).ToLower();
+                            
+                            try
                             {
-                                var (width, height) = dimensions[i];
-                                
-                                // 绘制当前图像
-                                g.DrawImage(img, 0, currentY, width, height);
-                                
-                                // 如果不是最后一张，绘制分隔线
-                                if (i < fileList.Count - 1)
+                                // 如果是WebP文件，使用转换后的PNG文件
+                                string actualPath = filePath;
+                                if (ext == ".webp")
                                 {
-                                    g.DrawLine(pen, 0, currentY + height, maxWidth, currentY + height);
+                                    actualPath = ConvertWebPToPng(filePath);
                                 }
                                 
-                                currentY += height;
+                                using (var img = System.Drawing.Image.FromFile(actualPath))
+                                {
+                                    var (width, height) = dimensions[i];
+                                    
+                                    // 绘制当前图像
+                                    g.DrawImage(img, 0, currentY, width, height);
+                                    
+                                    // 如果不是最后一张，绘制分隔线
+                                    if (i < fileList.Count - 1)
+                                    {
+                                        g.DrawLine(pen, 0, currentY + height, maxWidth, currentY + height);
+                                    }
+                                    
+                                    currentY += height;
+                                }
+                                
+                                // 报告进度 (i+2 因为0=计算开始, 1=计算完成, 2+=处理图像)
+                                progressCallback?.Invoke(i + 2, fileList.Count);
+                                
+                                // 强制垃圾回收以释放已处理的图像内存
+                                if (i % 10 == 0 && i > 0)
+                                {
+                                    GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, false);
+                                }
                             }
-                            
-                            // 报告进度 (i+2 因为0=计算开始, 1=计算完成, 2+=处理图像)
-                            progressCallback?.Invoke(i + 2, fileList.Count);
-                            
-                            // 强制垃圾回收以释放已处理的图像内存
-                            if (i % 10 == 0 && i > 0)
+                            catch (OutOfMemoryException ex)
                             {
-                                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, false);
+                                if (ext == ".webp")
+                                {
+                                    throw new NotSupportedException($"处理WebP文件时出错: {filePath}。System.Drawing对WebP的支持有限，建议先将WebP转换为PNG或JPEG格式。", ex);
+                                }
+                                throw;
+                            }
+                            catch (ArgumentException ex)
+                            {
+                                if (ext == ".webp")
+                                {
+                                    throw new NotSupportedException($"处理WebP文件时出错: {filePath}。System.Drawing对WebP的支持有限，建议先将WebP转换为PNG或JPEG格式。", ex);
+                                }
+                                throw new ArgumentException($"处理图像文件时出错: {filePath}。可能文件格式不支持或文件已损坏。", ex);
+                            }
+                            catch (Exception ex)
+                            {
+                                if (ext == ".webp")
+                                {
+                                    throw new NotSupportedException($"处理WebP文件时出错: {filePath}。System.Drawing对WebP的支持有限，建议先将WebP转换为PNG或JPEG格式。", ex);
+                                }
+                                throw new Exception($"处理图像文件时出错: {filePath}", ex);
                             }
                         }
                     }
@@ -187,18 +343,18 @@ namespace ImgMerge
         /// 旧版本的合并方法（保留以兼容，但不推荐使用）
         /// </summary>
         [Obsolete("此方法会一次性加载所有图像到内存，建议使用 CombinImage(IEnumerable<string>, Action<int, int>) 方法")]
-        public static Bitmap CombinImage(Image img1, Image img2, int xDeviation = 0, int yDeviation = 0)
+        public static Bitmap CombinImage(System.Drawing.Image img1, System.Drawing.Image img2, int xDeviation = 0, int yDeviation = 0)
         {
             Bitmap bmp = new Bitmap(img1.Width, img1.Height + img2.Height);
             
             using (Graphics g = Graphics.FromImage(bmp))
-            using (var brush = new SolidBrush(Color.LightGray))
+            using (var brush = new SolidBrush(System.Drawing.Color.LightGray))
             using (var p = new Pen(brush, 1.0f))
             {
                 p.DashStyle = System.Drawing.Drawing2D.DashStyle.Custom;
                 p.DashPattern = new float[] { 5, 5 };
                 
-                g.Clear(Color.White);
+                g.Clear(System.Drawing.Color.White);
                 g.DrawImage(img1, 0, 0, img1.Width, img1.Height);
                 g.DrawImage(img2, 0, img1.Height, img2.Width, img2.Height);
                 g.DrawLine(p, 0, img1.Height, img1.Width, img1.Height);

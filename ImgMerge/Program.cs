@@ -78,6 +78,14 @@ namespace ImgMerge
 
             Console.WriteLine($"找到 {files.Count} 张图片，开始合并...");
             Console.WriteLine("提示: 使用优化的内存管理算法，可以处理更多图像");
+            
+            // 检查是否有WebP文件
+            var webpCount = files.Count(f => Path.GetExtension(f).ToLower() == ".webp");
+            if (webpCount > 0)
+            {
+                Console.WriteLine($"提示: 检测到 {webpCount} 个WebP文件，将自动转换为PNG格式处理");
+            }
+            
             try
             {
                 // 显示内存使用情况
@@ -125,6 +133,9 @@ namespace ImgMerge
                     Console.WriteLine($"合并完成！输出文件: {outFileName}");
                     Console.WriteLine($"内存使用: {memoryUsed:F2} MB");
                 }
+                
+                // 清理WebP转换缓存
+                MergeImgHelper.CleanupWebPCache();
             }
             catch (ArgumentException ae)
             {
@@ -141,6 +152,17 @@ namespace ImgMerge
                 Console.WriteLine($"错误: 文件未找到 - {fe.FileName}");
                 return;
             }
+            catch (NotSupportedException nse)
+            {
+                Console.WriteLine($"错误: {nse.Message}");
+                if (nse.InnerException != null)
+                {
+                    Console.WriteLine($"详细信息: {nse.InnerException.Message}");
+                }
+                // 清理WebP转换缓存
+                MergeImgHelper.CleanupWebPCache();
+                return;
+            }
             catch (Exception e)
             {
                 Console.WriteLine($"错误: {e.Message}");
@@ -148,6 +170,8 @@ namespace ImgMerge
                 {
                     Console.WriteLine($"内部错误: {e.InnerException.Message}");
                 }
+                // 清理WebP转换缓存
+                MergeImgHelper.CleanupWebPCache();
                 return;
             }
         }
