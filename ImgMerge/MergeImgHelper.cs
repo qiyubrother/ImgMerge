@@ -232,6 +232,7 @@ namespace ImgMerge
             }
 
             // 第二步：一次性创建最终Bitmap，避免重复创建中间Bitmap
+            // 注意：由于WebP转换可能导致实际尺寸与预先计算的不同，我们使用动态调整
             Bitmap result;
             try
             {
@@ -240,6 +241,10 @@ namespace ImgMerge
             catch (OutOfMemoryException)
             {
                 throw new OutOfMemoryException($"无法创建 {maxWidth}x{totalHeight} 的图像，内存不足");
+            }
+            catch (ArgumentException ex)
+            {
+                throw new ArgumentException($"无法创建图像，尺寸无效: {maxWidth}x{totalHeight}。{ex.Message}", ex);
             }
             
             try
@@ -258,12 +263,21 @@ namespace ImgMerge
                     
                     // 准备画笔（仅在需要绘制分隔线时创建）
                     Pen? pen = null;
+                    SolidBrush? brush = null;
                     if (drawSeparatorLines)
                     {
-                        var brush = new SolidBrush(System.Drawing.Color.LightGray);
+                        brush = new SolidBrush(System.Drawing.Color.LightGray);
                         pen = new Pen(brush, 1.0f);
-                        pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Custom;
-                        pen.DashPattern = new float[] { 5, 5 };
+                        try
+                        {
+                            pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Custom;
+                            pen.DashPattern = new float[] { 5, 5 };
+                        }
+                        catch
+                        {
+                            // 如果设置虚线样式失败，使用实线
+                            pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Solid;
+                        }
                     }
                     
                     try
@@ -287,18 +301,72 @@ namespace ImgMerge
                                 
                                 using (var img = System.Drawing.Image.FromFile(actualPath))
                                 {
-                                    var (width, height) = dimensions[i];
+                                    // 获取实际图像的尺寸
+                                    int actualWidth = img.Width;
+                                    int actualHeight = img.Height;
                                     
-                                    // 绘制当前图像
-                                    g.DrawImage(img, 0, currentY, width, height);
+                                    // 验证尺寸有效性
+                                    if (actualWidth <= 0 || actualHeight <= 0)
+                                    {
+                                        throw new ArgumentException($"图像文件尺寸无效: {filePath} (宽度: {actualWidth}, 高度: {actualHeight})");
+                                    }
+                                    
+                                    // 验证坐标和尺寸不会超出范围
+                                    if (currentY < 0)
+                                    {
+                                        throw new ArgumentException($"绘制位置无效: {filePath}。当前Y: {currentY}");
+                                    }
+                                    
+                                    if (currentY + actualHeight > result.Height)
+                                    {
+                                        throw new ArgumentException($"图像高度超出画布范围: {filePath}。当前Y: {currentY}, 图像高度: {actualHeight}, 画布高度: {result.Height}");
+                                    }
+                                    
+                                    if (actualWidth > result.Width)
+                                    {
+                                        throw new ArgumentException($"图像宽度超出画布范围: {filePath}。图像宽度: {actualWidth}, 画布宽度: {result.Width}");
+                                    }
+                                    
+                                    // 使用实际图像的尺寸进行绘制
+                                    try
+                                    {
+                                        g.DrawImage(img, 0, currentY, actualWidth, actualHeight);
+                                    }
+                                    catch (ArgumentException ex)
+                                    {
+                                        throw new ArgumentException($"绘制图像时出错: {filePath}。图像尺寸: {actualWidth}x{actualHeight}，位置: (0, {currentY})，画布尺寸: {result.Width}x{result.Height}。错误: {ex.Message}", ex);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        throw new Exception($"绘制图像时发生未知错误: {filePath}。图像尺寸: {actualWidth}x{actualHeight}。错误: {ex.Message}", ex);
+                                    }
+                                    
+                                    // 更新当前位置
+                                    currentY += actualHeight;
                                     
                                     // 如果需要绘制分隔线且不是最后一张，绘制分隔线
                                     if (drawSeparatorLines && pen != null && i < fileList.Count - 1)
                                     {
-                                        g.DrawLine(pen, 0, currentY + height, maxWidth, currentY + height);
+                                        // 分隔线位置在当前图像的底部（即下一个图像的顶部）
+                                        int lineY = currentY;
+                                        
+                                        // 只要不是最后一张图，就绘制分隔线
+                                        // 使用 Math.Min 确保分隔线不会超出画布边界
+                                        if (lineY >= 0 && result.Width > 0)
+                                        {
+                                            try
+                                            {
+                                                // 限制 lineY 不超过画布高度（如果超出，使用画布底部）
+                                                int actualLineY = Math.Min(lineY, result.Height - 1);
+                                                // 使用画布宽度绘制分隔线（横跨整个宽度）
+                                                g.DrawLine(pen, 0, actualLineY, result.Width, actualLineY);
+                                            }
+                                            catch (ArgumentException ex)
+                                            {
+                                                throw new ArgumentException($"绘制分隔线时出错: 位置 (0, {lineY}) 到 ({result.Width}, {lineY})，画布尺寸: {result.Width}x{result.Height}。错误: {ex.Message}", ex);
+                                            }
+                                        }
                                     }
-                                    
-                                    currentY += height;
                                 }
                                 
                                 // 报告进度 (i+2 因为0=计算开始, 1=计算完成, 2+=处理图像)
@@ -338,14 +406,14 @@ namespace ImgMerge
                     }
                     finally
                     {
-                        // 释放画笔资源
+                        // 释放画笔资源（先释放Pen，再释放Brush）
                         if (pen != null)
                         {
                             pen.Dispose();
-                            if (pen.Brush != null)
-                            {
-                                pen.Brush.Dispose();
-                            }
+                        }
+                        if (brush != null)
+                        {
+                            brush.Dispose();
                         }
                     }
                 }

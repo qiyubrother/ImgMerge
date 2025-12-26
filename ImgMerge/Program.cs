@@ -153,6 +153,12 @@ namespace ImgMerge
             catch (ArgumentException ae)
             {
                 Console.WriteLine($"错误: {ae.Message}");
+                if (ae.InnerException != null)
+                {
+                    Console.WriteLine($"详细信息: {ae.InnerException.Message}");
+                }
+                // 清理WebP转换缓存
+                MergeImgHelper.CleanupWebPCache();
                 return;
             }
             catch (OutOfMemoryException)
