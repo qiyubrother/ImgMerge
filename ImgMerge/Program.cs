@@ -77,20 +77,49 @@ namespace ImgMerge
             }
 
             Console.WriteLine($"找到 {files.Count} 张图片，开始合并...");
+            Console.WriteLine("提示: 使用优化的内存管理算法，可以处理更多图像");
             try
             {
-                GC.Collect();
-                using (var bmp = MergeImgHelper.CombinImage(files))
+                // 显示内存使用情况
+                var memoryBefore = GC.GetTotalMemory(false);
+                
+                // 使用优化的合并方法，带进度回调
+                using (var bmp = MergeImgHelper.CombinImage(files, (current, total) =>
                 {
+                    if (current == 0)
+                    {
+                        Console.Write("正在计算图像尺寸...");
+                    }
+                    else if (current == 1)
+                    {
+                        Console.WriteLine(" 完成");
+                        Console.Write("正在合并图像: ");
+                    }
+                    else if (current <= total)
+                    {
+                        var percent = (int)((current - 1) * 100.0 / (total - 1));
+                        Console.Write($"\r正在合并图像: {current - 1}/{total - 1} ({percent}%)");
+                    }
+                }))
+                {
+                    Console.WriteLine(); // 换行
+                    
                     var fileInfo = new FileInfo(outFileName);
                     if (!string.IsNullOrEmpty(fileInfo.DirectoryName) && !Directory.Exists(fileInfo.DirectoryName))
                     {
                         Directory.CreateDirectory(fileInfo.DirectoryName);
                     }
 
+                    Console.Write("正在保存图像...");
                     // 保存图像
                     SaveImage(bmp, outFileName, imgFormat);
+                    
+                    var memoryAfter = GC.GetTotalMemory(false);
+                    var memoryUsed = (memoryAfter - memoryBefore) / (1024.0 * 1024.0);
+                    
+                    Console.WriteLine(" 完成");
                     Console.WriteLine($"合并完成！输出文件: {outFileName}");
+                    Console.WriteLine($"内存使用: {memoryUsed:F2} MB");
                 }
             }
             catch (ArgumentException ae)
