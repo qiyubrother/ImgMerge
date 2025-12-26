@@ -23,7 +23,7 @@ namespace ImgMerge
                 return;
             }
 
-            if (args.Length != 1 && args.Length != 2)
+            if (args.Length < 1 || args.Length > 3)
             {
                 ShowErrorMessage();
                 return;
@@ -39,6 +39,7 @@ namespace ImgMerge
 
             ImageFormat imgFormat = ImageFormat.Png;
             List<string> files = new List<string>();
+            bool drawSeparatorLines = false; // 默认不绘制分隔线
 
             // 解析输入参数
             if (!ParseInputFiles(arr[0], arr[1], ref files))
@@ -47,25 +48,37 @@ namespace ImgMerge
                 return;
             }
 
-            // 解析输出参数（如果提供）
-            if (args.Length == 2)
+            // 解析其他参数
+            for (int i = 1; i < args.Length; i++)
             {
-                var arr2 = args[1].Split('=');
-                if (arr2.Length != 2 || arr2[0] != "--o")
+                if (args[i].StartsWith("--o="))
                 {
-                    ShowErrorMessage();
-                    return;
+                    // 输出文件参数
+                    var arr2 = args[i].Split('=');
+                    if (arr2.Length == 2)
+                    {
+                        outFileName = arr2[1];
+                        var fi = new FileInfo(outFileName);
+                        var format = GetImageFormatFromExtension(fi.Extension);
+                        if (format == null)
+                        {
+                            Console.WriteLine($"错误: 不支持的输出格式 '{fi.Extension}'");
+                            Console.WriteLine($"支持的输出格式: PNG, JPG/JPEG, GIF, BMP, WebP");
+                            return;
+                        }
+                        imgFormat = format;
+                    }
                 }
-                outFileName = arr2[1];
-                var fi = new FileInfo(outFileName);
-                var format = GetImageFormatFromExtension(fi.Extension);
-                if (format == null)
+                else if (args[i] == "--line" || args[i] == "-l")
                 {
-                    Console.WriteLine($"错误: 不支持的输出格式 '{fi.Extension}'");
-                    Console.WriteLine($"支持的输出格式: PNG, JPG/JPEG, GIF, BMP, WebP");
-                    return;
+                    // 绘制分隔线选项
+                    drawSeparatorLines = true;
                 }
-                imgFormat = format;
+                else if (args[i] == "--no-line" || args[i] == "-nl")
+                {
+                    // 不绘制分隔线选项（显式指定）
+                    drawSeparatorLines = false;
+                }
             }
 
             if (files.Count < 2)
@@ -91,7 +104,7 @@ namespace ImgMerge
                 // 显示内存使用情况
                 var memoryBefore = GC.GetTotalMemory(false);
                 
-                // 使用优化的合并方法，带进度回调
+                // 使用优化的合并方法，带进度回调和分隔线选项
                 // current: 0=开始计算尺寸, 1=计算完成, 2+=已处理的图像数（从1开始）
                 // total: 图像总数
                 using (var bmp = MergeImgHelper.CombinImage(files, (current, total) =>
@@ -112,7 +125,7 @@ namespace ImgMerge
                         var percent = total > 0 ? (int)(processed * 100.0 / total) : 0;
                         Console.Write($"\r正在合并图像: {processed}/{total} ({percent}%)");
                     }
-                }))
+                }, drawSeparatorLines))
                 {
                     Console.WriteLine(); // 换行
                     
@@ -333,17 +346,20 @@ namespace ImgMerge
             Console.WriteLine("     示例: ImgMerge.exe --s=.\\source\\*.jpg --o=result.jpg");
             Console.WriteLine();
             Console.WriteLine("参数说明:");
-            Console.WriteLine("  --d    : 从指定目录读取所有支持的图片文件");
-            Console.WriteLine("  --f    : 指定要合并的文件列表（用分号分隔）");
-            Console.WriteLine("  --s    : 使用通配符匹配文件");
-            Console.WriteLine("  --o    : 指定输出文件名（可选，默认为result.png）");
-            Console.WriteLine("  --help : 显示此帮助信息");
+            Console.WriteLine("  --d       : 从指定目录读取所有支持的图片文件");
+            Console.WriteLine("  --f       : 指定要合并的文件列表（用分号分隔）");
+            Console.WriteLine("  --s       : 使用通配符匹配文件");
+            Console.WriteLine("  --o       : 指定输出文件名（可选，默认为result.png）");
+            Console.WriteLine("  --line    : 在图像之间绘制分隔线（可选，默认不绘制）");
+            Console.WriteLine("  --no-line : 不绘制分隔线（可选，默认行为）");
+            Console.WriteLine("  --help    : 显示此帮助信息");
             Console.WriteLine();
             Console.WriteLine("注意事项:");
             Console.WriteLine("  - 至少需要2张图片才能进行合并");
             Console.WriteLine("  - 图片将按文件名顺序垂直合并");
             Console.WriteLine("  - 如果输出目录不存在，将自动创建");
             Console.WriteLine("  - WebP格式的输出将自动转换为PNG格式");
+            Console.WriteLine("  - 默认不绘制分隔线，使用 --line 选项可启用分隔线");
             Console.WriteLine();
         }
 
@@ -354,7 +370,7 @@ namespace ImgMerge
             Console.WriteLine("快速示例:");
             Console.WriteLine("  ImgMerge.exe --d=.\\source --o=result.png");
             Console.WriteLine("  ImgMerge.exe --f=img1.jpg;img2.jpg --o=result.jpg");
-            Console.WriteLine("  ImgMerge.exe --s=.\\source\\*.jpg --o=result.jpg");
+            Console.WriteLine("  ImgMerge.exe --s=.\\source\\*.jpg --o=result.jpg --line");
             Console.WriteLine();
             Console.WriteLine("输入 'ImgMerge.exe --help' 查看详细使用说明");
         }

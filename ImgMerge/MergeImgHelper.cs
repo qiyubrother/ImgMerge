@@ -184,7 +184,10 @@ namespace ImgMerge
         /// <summary>
         /// 优化的图像合并方法 - 流式处理，节省内存
         /// </summary>
-        public static Bitmap CombinImage(IEnumerable<string> files, Action<int, int>? progressCallback = null)
+        /// <param name="files">要合并的图像文件列表</param>
+        /// <param name="progressCallback">进度回调函数</param>
+        /// <param name="drawSeparatorLines">是否绘制分隔线（默认false）</param>
+        public static Bitmap CombinImage(IEnumerable<string> files, Action<int, int>? progressCallback = null, bool drawSeparatorLines = false)
         {
             var fileList = files.ToList();
             
@@ -253,13 +256,18 @@ namespace ImgMerge
                     // 清除背景
                     g.Clear(System.Drawing.Color.White);
                     
-                    // 准备画笔和画笔（复用，避免重复创建）
-                    using (var brush = new SolidBrush(System.Drawing.Color.LightGray))
-                    using (var pen = new Pen(brush, 1.0f))
+                    // 准备画笔（仅在需要绘制分隔线时创建）
+                    Pen? pen = null;
+                    if (drawSeparatorLines)
                     {
+                        var brush = new SolidBrush(System.Drawing.Color.LightGray);
+                        pen = new Pen(brush, 1.0f);
                         pen.DashStyle = System.Drawing.Drawing2D.DashStyle.Custom;
                         pen.DashPattern = new float[] { 5, 5 };
-                        
+                    }
+                    
+                    try
+                    {
                         int currentY = 0;
                         
                         // 第三步：流式处理 - 一次只加载一张图像
@@ -284,8 +292,8 @@ namespace ImgMerge
                                     // 绘制当前图像
                                     g.DrawImage(img, 0, currentY, width, height);
                                     
-                                    // 如果不是最后一张，绘制分隔线
-                                    if (i < fileList.Count - 1)
+                                    // 如果需要绘制分隔线且不是最后一张，绘制分隔线
+                                    if (drawSeparatorLines && pen != null && i < fileList.Count - 1)
                                     {
                                         g.DrawLine(pen, 0, currentY + height, maxWidth, currentY + height);
                                     }
@@ -325,6 +333,18 @@ namespace ImgMerge
                                     throw new NotSupportedException($"处理WebP文件时出错: {filePath}。System.Drawing对WebP的支持有限，建议先将WebP转换为PNG或JPEG格式。", ex);
                                 }
                                 throw new Exception($"处理图像文件时出错: {filePath}", ex);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        // 释放画笔资源
+                        if (pen != null)
+                        {
+                            pen.Dispose();
+                            if (pen.Brush != null)
+                            {
+                                pen.Brush.Dispose();
                             }
                         }
                     }
