@@ -84,6 +84,8 @@ namespace ImgMerge
                 var memoryBefore = GC.GetTotalMemory(false);
                 
                 // 使用优化的合并方法，带进度回调
+                // current: 0=开始计算尺寸, 1=计算完成, 2+=已处理的图像数（从1开始）
+                // total: 图像总数
                 using (var bmp = MergeImgHelper.CombinImage(files, (current, total) =>
                 {
                     if (current == 0)
@@ -93,12 +95,14 @@ namespace ImgMerge
                     else if (current == 1)
                     {
                         Console.WriteLine(" 完成");
-                        Console.Write("正在合并图像: ");
+                        Console.Write("正在合并图像: 0/" + total + " (0%)");
                     }
-                    else if (current <= total)
+                    else if (current >= 2 && current <= total + 1)
                     {
-                        var percent = (int)((current - 1) * 100.0 / (total - 1));
-                        Console.Write($"\r正在合并图像: {current - 1}/{total - 1} ({percent}%)");
+                        // current >= 2 表示开始处理图像，current-1 表示已处理的图像数量
+                        var processed = current - 1;
+                        var percent = total > 0 ? (int)(processed * 100.0 / total) : 0;
+                        Console.Write($"\r正在合并图像: {processed}/{total} ({percent}%)");
                     }
                 }))
                 {
@@ -124,7 +128,7 @@ namespace ImgMerge
             }
             catch (ArgumentException ae)
             {
-                Console.WriteLine($"错误: {ae.Message} (内存不足)");
+                Console.WriteLine($"错误: {ae.Message}");
                 return;
             }
             catch (OutOfMemoryException)

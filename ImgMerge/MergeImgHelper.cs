@@ -12,10 +12,17 @@ namespace ImgMerge
     class MergeImgHelper
     {
         /// <summary>
-        /// 获取图像尺寸信息（不加载完整图像到内存）
+        /// 获取图像尺寸信息
+        /// 注意：Image.FromFile 会加载整个图像到内存，但我们会立即释放
         /// </summary>
         private static (int width, int height) GetImageDimensions(string filePath)
         {
+            if (!File.Exists(filePath))
+            {
+                throw new FileNotFoundException($"图像文件不存在: {filePath}");
+            }
+            
+            // Image.FromFile 会加载整个图像，但我们只读取尺寸后立即释放
             using (var img = Image.FromFile(filePath))
             {
                 return (img.Width, img.Height);
@@ -30,13 +37,36 @@ namespace ImgMerge
             var dimensions = new List<(int width, int height)>();
             int maxWidth = 0;
             int totalHeight = 0;
+            int processedCount = 0;
 
             foreach (var file in files)
             {
-                var (width, height) = GetImageDimensions(file);
-                dimensions.Add((width, height));
-                maxWidth = Math.Max(maxWidth, width);
-                totalHeight += height;
+                try
+                {
+                    var (width, height) = GetImageDimensions(file);
+                    
+                    // 验证尺寸有效性
+                    if (width <= 0 || height <= 0)
+                    {
+                        throw new ArgumentException($"图像文件尺寸无效: {file} (宽度: {width}, 高度: {height})");
+                    }
+                    
+                    dimensions.Add((width, height));
+                    maxWidth = Math.Max(maxWidth, width);
+                    
+                    // 检查是否会溢出
+                    if (totalHeight > int.MaxValue - height)
+                    {
+                        throw new ArgumentException($"图像总高度过大，超出整数范围");
+                    }
+                    
+                    totalHeight += height;
+                    processedCount++;
+                }
+                catch (Exception ex)
+                {
+                    throw new ArgumentException($"处理图像文件时出错: {file}", ex);
+                }
             }
 
             return (maxWidth, totalHeight, dimensions);
@@ -65,8 +95,30 @@ namespace ImgMerge
             var (maxWidth, totalHeight, dimensions) = CalculateDimensions(fileList);
             progressCallback?.Invoke(1, fileList.Count);
 
+            // 验证尺寸合理性
+            if (maxWidth <= 0 || totalHeight <= 0)
+            {
+                throw new ArgumentException("图像尺寸无效");
+            }
+
+            // 检查是否会超出内存限制（估算：宽度 × 高度 × 4字节/像素）
+            long estimatedMemory = (long)maxWidth * totalHeight * 4;
+            const long maxMemoryEstimate = 2L * 1024 * 1024 * 1024; // 2GB 限制
+            if (estimatedMemory > maxMemoryEstimate)
+            {
+                throw new OutOfMemoryException($"图像太大，估算内存需求: {estimatedMemory / (1024.0 * 1024.0):F2} MB，超过限制 {maxMemoryEstimate / (1024.0 * 1024.0):F2} MB");
+            }
+
             // 第二步：一次性创建最终Bitmap，避免重复创建中间Bitmap
-            Bitmap result = new Bitmap(maxWidth, totalHeight);
+            Bitmap result;
+            try
+            {
+                result = new Bitmap(maxWidth, totalHeight);
+            }
+            catch (OutOfMemoryException)
+            {
+                throw new OutOfMemoryException($"无法创建 {maxWidth}x{totalHeight} 的图像，内存不足");
+            }
             
             try
             {
@@ -110,7 +162,7 @@ namespace ImgMerge
                                 currentY += height;
                             }
                             
-                            // 报告进度
+                            // 报告进度 (i+2 因为0=计算开始, 1=计算完成, 2+=处理图像)
                             progressCallback?.Invoke(i + 2, fileList.Count);
                             
                             // 强制垃圾回收以释放已处理的图像内存
